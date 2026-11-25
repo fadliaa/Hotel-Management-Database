@@ -6,6 +6,7 @@ and guard GUI execution under `if __name__ == "__main__":`.
 
 from __future__ import annotations
 
+from datetime import date
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Optional
@@ -325,13 +326,41 @@ class HotelBookingApp:
         self.booking_list = tk.Listbox(tab, width=110, height=8, font=("Consolas", 9))
         self.booking_list.pack(pady=8, padx=16, fill="x")
 
+    @staticmethod
+    def _read_date(widget: Any) -> date:
+        """Extract a date object from either tkcalendar.DateEntry or fallback tk.Entry (YYYY-MM-DD)."""
+        if hasattr(widget, "get_date"):
+            return widget.get_date()
+        raw = widget.get().strip()
+        try:
+            return date.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValueError(f"Invalid date '{raw}'. Use YYYY-MM-DD format.") from exc
+
+    def _has_room_conflict(self, cursor: Any, room_id: int, checkin: date, checkout: date) -> bool:
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM Booking b
+            JOIN BookingRoom br ON b.booking_id = br.booking_id
+            WHERE br.room_id = %s
+              AND b.status NOT IN ('Cancelled', 'Checked-Out')
+              AND b.check_in_date < %s AND %s < b.check_out_date
+            """,
+            (room_id, checkout, checkin),
+        )
+        return int(cursor.fetchone()[0]) > 0
+
     def calculate_amount(self) -> None:
         room_id = self.b_room.get().strip()
         if not room_id.isdigit():
             messagebox.showwarning("Input Error", "Enter a valid numeric Room ID.")
             return
-        checkin = self.b_in.get_date()
-        checkout = self.b_out.get_date()
+        try:
+            checkin = self._read_date(self.b_in)
+            checkout = self._read_date(self.b_out)
+        except ValueError as err:
+            messagebox.showerror("Date Error", str(err))
+            return
         if checkout <= checkin:
             messagebox.showerror("Date Error", "Check-out date must be after check-in date.")
             return
@@ -341,17 +370,7 @@ class HotelBookingApp:
             return
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM Booking b
-                JOIN BookingRoom br ON b.booking_id = br.booking_id
-                WHERE br.room_id = %s
-                  AND b.status NOT IN ('Cancelled', 'Checked-Out')
-                  AND b.check_in_date < %s AND %s < b.check_out_date
-                """,
-                (int(room_id), checkout, checkin),
-            )
-            if cursor.fetchone()[0] > 0:
+            if self._has_room_conflict(cursor, int(room_id), checkin, checkout):
                 messagebox.showerror("Booking Conflict", "Room is unavailable for the selected date range.")
                 return
 
@@ -382,20 +401,36 @@ class HotelBookingApp:
         if not (guest_id.isdigit() and room_id.isdigit() and amount):
             messagebox.showwarning("Input Error", "Enter numeric Guest ID & Room ID, then calculate amount first.")
             return
+        try:
+            checkin = self._read_date(self.b_in)
+            checkout = self._read_date(self.b_out)
+        except ValueError as err:
+            messagebox.showerror("Date Error", str(err))
+            return
+        if checkout <= checkin:
+            messagebox.showerror("Date Error", "Check-out date must be after check-in date.")
+            return
+
         conn = create_connection()
         if not conn:
             return
         cursor = conn.cursor()
         try:
+            if self._has_room_conflict(cursor, int(room_id), checkin, checkout):
+                messagebox.showerror("Booking Conflict", "Room is unavailable for the selected date range.")
+                return
             cursor.execute(
                 "INSERT INTO Booking (guest_id, check_in_date, check_out_date, total_amount) VALUES (%s, %s, %s, %s)",
-                (int(guest_id), self.b_in.get(), self.b_out.get(), amount),
+                (int(guest_id), checkin.isoformat(), checkout.isoformat(), amount),
             )
             booking_id = cursor.lastrowid
             cursor.execute("INSERT INTO BookingRoom (booking_id, room_id) VALUES (%s, %s)", (booking_id, int(room_id)))
             cursor.execute("UPDATE Room SET status = 'Reserved' WHERE room_id = %s", (int(room_id),))
             conn.commit()
             messagebox.showinfo("Success", f"Booking #{booking_id} created.")
+            self.b_amount.config(state="normal")
+            self.b_amount.delete(0, tk.END)
+            self.b_amount.config(state="readonly")
             self.show_bookings()
         except MySQLError as err:
             conn.rollback()
@@ -485,14 +520,52 @@ class HotelBookingApp:
 
         tk.Label(form, text="Method:", bg="white").grid(row=2, column=0, sticky="w", padx=8, pady=4)
         self.p_method = ttk.Combobox(
-            form, width=26, values=["Cash", "Credit Card", "Debit Card", "Bank Transfer", "Mobile Payment"]
+            form,
+            width=26,
+            values=["Cash", "Credit Card", "Debit Card", "Online Transfer", "Bank Transfer", "Mobile Payment"],
+            state="readonly",
         )
         self.p_method.set("Credit Card")
         self.p_method.grid(row=2, column=1, pady=4)
 
-        tk.Button(form, text="Record Payment", command=self.record_payment, bg="#16a34a", fg="white", width=22, pady=4).grid(row=3, column=0, columnspan=2, pady=8)
+        p_btns = tk.Frame(tab, bg="white")
+        p_btns.pack(pady=4)
+        tk.Button(p_btns, text="Record Payment", command=self.record_payment, bg="#16a34a", fg="white", width=18, pady=4).pack(side="left", padx=4)
+        tk.Button(p_btns, text="Refresh Payments", command=self.show_payments, bg="#2563eb", fg="white", width=18, pady=4).pack(side="left", padx=4)
+
         self.payment_list = tk.Listbox(tab, width=110, height=11, font=("Consolas", 9))
         self.payment_list.pack(pady=8, padx=16, fill="x")
+
+    def show_payments(self) -> None:
+        self.payment_list.delete(0, tk.END)
+        conn = create_connection()
+        if not conn:
+            return
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT p.payment_id, p.booking_id, CONCAT(g.first_name, ' ', g.last_name),
+                       p.amount, p.payment_method, p.payment_date
+                FROM Payment p
+                JOIN Booking b ON p.booking_id = b.booking_id
+                JOIN Guest g ON b.guest_id = g.guest_id
+                ORDER BY p.payment_id DESC
+                """
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                self.payment_list.insert(tk.END, "No payments recorded.")
+                return
+            for p in rows:
+                self.payment_list.insert(
+                    tk.END, f"ID: {p[0]} | Booking: #{p[1]} | Guest: {p[2]} | ${p[3]} | {p[4]} | {p[5]}"
+                )
+        except MySQLError as err:
+            messagebox.showerror("Database Error", str(err))
+        finally:
+            cursor.close()
+            conn.close()
 
     def record_payment(self) -> None:
         bid = self.p_booking.get().strip()
@@ -524,6 +597,7 @@ class HotelBookingApp:
             conn.commit()
             messagebox.showinfo("Success", f"Recorded payment of ${validated:.2f}.")
             self.p_amount.delete(0, tk.END)
+            self.show_payments()
         except (ValueError, MySQLError) as err:
             conn.rollback()
             messagebox.showerror("Payment Error", str(err))

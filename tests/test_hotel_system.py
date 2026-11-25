@@ -18,6 +18,8 @@ from business_logic import (
     parse_selected_id,
     validate_payment_amount,
 )
+from config import DatabaseConfig
+from hotel_booking_app import HotelBookingApp
 
 SQLITE_EQUIVALENT_SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -102,6 +104,24 @@ class TestHotelBusinessLogic(unittest.TestCase):
         self.assertIsNone(parse_selected_id("No guests found."))
         self.assertIsNone(normalize_optional_field("   "))
         self.assertEqual(normalize_optional_field(" test@example.com "), "test@example.com")
+
+    def test_fallback_entry_date_parsing(self) -> None:
+        class _DummyEntry:
+            def __init__(self, text: str) -> None:
+                self._text = text
+
+            def get(self) -> str:
+                return self._text
+
+        self.assertEqual(HotelBookingApp._read_date(_DummyEntry("2026-07-15")), date(2026, 7, 15))
+        with self.assertRaises(ValueError):
+            HotelBookingApp._read_date(_DummyEntry("not-a-date"))
+
+    def test_env_config_defaults(self) -> None:
+        cfg = DatabaseConfig.from_env()
+        self.assertIsInstance(cfg.port, int)
+        self.assertTrue(bool(cfg.host))
+        self.assertTrue(bool(cfg.database))
 
 
 class TestHotelRelationalModel(unittest.TestCase):

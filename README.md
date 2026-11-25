@@ -1,8 +1,16 @@
 # Hotel Management Relational Database & Desktop App
 
-A complete relational database lifecycle project—from conceptual ERD and normalized schema design to a Python/Tkinter operational client backed by MySQL.
+## What It Does
 
-## Repository Structure
+A complete relational database lifecycle project—from conceptual Entity-Relationship Diagram (ERD) and normalized 7-table schema design to a multi-tab Python/Tkinter operational client backed by MySQL. It supports guest registration with multi-valued phone records, room inventory tracking, date-overlap conflict prevention, dynamic 10% tax + 5% service charge billing, split payment tracking, and 7 aggregated SQL management reports.
+
+## Tech Stack
+
+- **Database:** MySQL 8.0+ (DDL/DML, `PRIMARY KEY`, `FOREIGN KEY`, `UNIQUE`, `ENUM`, `CHECK` constraints)
+- **Application:** Python 3.11+, Tkinter, `mysql-connector-python`, `tkcalendar`
+- **Testing:** Python `unittest`, in-memory SQLite relational integrity suite
+
+## Project Structure
 
 ```text
 ├── sql/
@@ -29,7 +37,7 @@ A complete relational database lifecycle project—from conceptual ERD and norma
 
 Design artifacts are available in [`docs/`](docs/): Entity-Relationship Diagram (ERD), Relational Schema, Data Dictionary, Transaction Pathways, and Presentation Deck.
 
-## Setup & Usage
+## How to Run
 
 ```bash
 # 1. Initialize MySQL schema and seed sample records
@@ -41,6 +49,8 @@ cp .env.example .env
 # Edit .env and set HOTEL_DB_PASSWORD
 
 # 3. Install Python dependencies and run the desktop client
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python src/hotel_booking_app.py
 
